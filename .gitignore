@@ -1,0 +1,16 @@
+# Binaries
+ferrum
+ferrum.exe
+*.exe
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Test cache
+/tmp/
