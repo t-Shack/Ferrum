@@ -17,20 +17,33 @@ type Secret struct {
 	Value string
 }
 
-// Store is a thread-safe in-memory secrets store.
+// Store is a thread-safe in-memory secrets store backed by encrypted disk persistence.
 type Store struct {
-	mu      sync.RWMutex
-	secrets map[string]Secret
+	mu            sync.RWMutex
+	secrets       map[string]Secret
+	encryptionKey []byte
 }
 
-// New creates and returns an initialised Store.
-func New() *Store {
-	return &Store{
-		secrets: make(map[string]Secret),
+// New creates and returns an initialised Store, loading any existing secrets from disk.
+func New(encryptionKey []byte) (*Store, error) {
+	s := &Store{
+		secrets:       make(map[string]Secret),
+		encryptionKey: encryptionKey,
 	}
+
+	existing, err := loadFromDisk(encryptionKey)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, secret := range existing {
+		s.secrets[secret.Key] = secret
+	}
+
+	return s, nil
 }
 
-// Set stores a new secret. Returns ErrAlreadyExists if the key is taken.
+// Set stores a new secret in memory and persists it encrypted to disk.
 func (s *Store) Set(key, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -39,11 +52,17 @@ func (s *Store) Set(key, value string) error {
 		return ErrAlreadyExists
 	}
 
-	s.secrets[key] = Secret{Key: key, Value: value}
+	secret := Secret{Key: key, Value: value}
+
+	if err := saveToDisk(s.encryptionKey, secret); err != nil {
+		return err
+	}
+
+	s.secrets[key] = secret
 	return nil
 }
 
-// Get retrieves a secret by key. Returns ErrNotFound if the key does not exist.
+// Get retrieves a secret by key.
 func (s *Store) Get(key string) (Secret, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -56,13 +75,17 @@ func (s *Store) Get(key string) (Secret, error) {
 	return secret, nil
 }
 
-// Delete removes a secret by key. Returns ErrNotFound if the key does not exist.
+// Delete removes a secret from memory and from disk.
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.secrets[key]; !exists {
 		return ErrNotFound
+	}
+
+	if err := deleteFromDisk(key); err != nil {
+		return err
 	}
 
 	delete(s.secrets, key)
