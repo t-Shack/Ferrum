@@ -15,7 +15,8 @@ const tokenTTL = 1 * time.Hour
 // credentials holds the single hardcoded admin user for this version.
 // Real credential storage comes in a later version.
 var credentials = map[string]string{
-	"admin": "ferrum-admin-password",
+	"admin":  "ferrum-admin-password",
+	"reader": "ferrum-reader-password",
 }
 
 // Server holds the router and all dependencies the handlers need.
@@ -83,7 +84,14 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role := "admin"
+	role, ok := map[string]string{
+		"admin":  roleAdmin,
+		"reader": roleReader,
+	}[body.Username]
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "role not configured")
+		return
+	}
 	tokenString, err := token.Issue(s.tokenKey, body.Username, role, tokenTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to issue token")

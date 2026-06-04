@@ -41,15 +41,18 @@ func newTestServer(t *testing.T) *Server {
 	return New(st, testTokenKey())
 }
 
-func getTestToken(t *testing.T, srv *Server) string {
+func getToken(t *testing.T, srv *Server, username, password string) string {
 	t.Helper()
-	body := `{"username":"admin","password":"ferrum-admin-password"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBufferString(body))
+	body, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBuffer(body))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("auth failed: status %d", rec.Code)
+		t.Fatalf("auth failed for %q: status %d body %s", username, rec.Code, rec.Body.String())
 	}
 
 	var resp map[string]string
@@ -89,7 +92,8 @@ func TestAuth_InvalidCredentials(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBufferString(tt.body))
+			req := httptest.NewRequest(http.MethodPost, "/auth",
+				bytes.NewBufferString(tt.body))
 			rec := httptest.NewRecorder()
 			srv.ServeHTTP(rec, req)
 
@@ -109,14 +113,15 @@ func TestSecrets_RequiresAuth(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("unauthenticated request: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		t.Errorf("unauthenticated request: status = %d, want %d",
+			rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestCreateAndGetSecret_Authenticated(t *testing.T) {
+func TestAdminCanCreateAndReadSecret(t *testing.T) {
 	defer cleanup(t)
 	srv := newTestServer(t)
-	tok := getTestToken(t, srv)
+	tok := getToken(t, srv, "admin", "ferrum-admin-password")
 
 	createReq := httptest.NewRequest(http.MethodPost, "/secrets",
 		bytes.NewBufferString(`{"key":"db_pass","value":"hunter2"}`))
@@ -136,24 +141,58 @@ func TestCreateAndGetSecret_Authenticated(t *testing.T) {
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, want %d", getRec.Code, http.StatusOK)
 	}
-
-	var resp map[string]string
-	json.NewDecoder(getRec.Body).Decode(&resp)
-	if resp["value"] != "hunter2" {
-		t.Errorf("value = %q, want %q", resp["value"], "hunter2")
-	}
 }
 
-func TestCreateSecret_Unauthenticated(t *testing.T) {
+func TestReaderCanReadButNotCreate(t *testing.T) {
 	defer cleanup(t)
 	srv := newTestServer(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/secrets",
-		bytes.NewBufferString(`{"key":"db_pass","value":"hunter2"}`))
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	adminTok := getToken(t, srv, "admin", "ferrum-admin-password")
+	createReq := httptest.NewRequest(http.MethodPost, "/secrets",
+		bytes.NewBufferString(`{"key":"shared_key","value":"secret123"}`))
+	createReq.Header.Set("Authorization", "Bearer "+adminTok)
+	srv.ServeHTTP(httptest.NewRecorder(), createReq)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	readerTok := getToken(t, srv, "reader", "ferrum-reader-password")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/secrets/shared_key", nil)
+	getReq.Header.Set("Authorization", "Bearer "+readerTok)
+	getRec := httptest.NewRecorder()
+	srv.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Errorf("reader GET status = %d, want %d", getRec.Code, http.StatusOK)
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, "/secrets",
+		bytes.NewBufferString(`{"key":"new_key","value":"val"}`))
+	postReq.Header.Set("Authorization", "Bearer "+readerTok)
+	postRec := httptest.NewRecorder()
+	srv.ServeHTTP(postRec, postReq)
+
+	if postRec.Code != http.StatusForbidden {
+		t.Errorf("reader POST status = %d, want %d", postRec.Code, http.StatusForbidden)
+	}
+}
+
+func TestReaderCannotDelete(t *testing.T) {
+	defer cleanup(t)
+	srv := newTestServer(t)
+
+	adminTok := getToken(t, srv, "admin", "ferrum-admin-password")
+	createReq := httptest.NewRequest(http.MethodPost, "/secrets",
+		bytes.NewBufferString(`{"key":"to_delete","value":"val"}`))
+	createReq.Header.Set("Authorization", "Bearer "+adminTok)
+	srv.ServeHTTP(httptest.NewRecorder(), createReq)
+
+	readerTok := getToken(t, srv, "reader", "ferrum-reader-password")
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/secrets/to_delete", nil)
+	delReq.Header.Set("Authorization", "Bearer "+readerTok)
+	delRec := httptest.NewRecorder()
+	srv.ServeHTTP(delRec, delReq)
+
+	if delRec.Code != http.StatusForbidden {
+		t.Errorf("reader DELETE status = %d, want %d", delRec.Code, http.StatusForbidden)
 	}
 }

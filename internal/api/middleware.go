@@ -8,7 +8,8 @@ import (
 )
 
 // requireAuth is middleware that validates a JWT from the Authorization header.
-// If the token is valid, the request proceeds. Otherwise it returns 401.
+// If the token is valid, it passes the verified claims downstream and
+// enforces the access policy for the requested resource.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -31,6 +32,16 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/secrets/") {
+			path = "/secrets/"
+		}
+
+		if !isAuthorized(claims.Role, r.Method, path) {
+			writeError(w, http.StatusForbidden, "insufficient permissions")
 			return
 		}
 
