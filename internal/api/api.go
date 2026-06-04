@@ -4,21 +4,33 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/t-Shack/Ferrum/internal/store"
+	"github.com/t-Shack/Ferrum/internal/token"
 )
+
+const tokenTTL = 1 * time.Hour
+
+// credentials holds the single hardcoded admin user for this version.
+// Real credential storage comes in a later version.
+var credentials = map[string]string{
+	"admin": "ferrum-admin-password",
+}
 
 // Server holds the router and all dependencies the handlers need.
 type Server struct {
-	mux   *http.ServeMux
-	store *store.Store
+	mux      *http.ServeMux
+	store    *store.Store
+	tokenKey []byte
 }
 
 // New creates a new Server, wires up all routes, and returns it.
-func New(st *store.Store) *Server {
+func New(st *store.Store, tokenKey []byte) *Server {
 	s := &Server{
-		mux:   http.NewServeMux(),
-		store: st,
+		mux:      http.NewServeMux(),
+		store:    st,
+		tokenKey: tokenKey,
 	}
 	s.routes()
 	return s
@@ -31,8 +43,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // routes registers all API endpoints.
 func (s *Server) routes() {
-	s.mux.HandleFunc("/secrets", s.handleSecrets)
-	s.mux.HandleFunc("/secrets/", s.handleSecretByKey)
+	s.mux.HandleFunc("/auth", s.handleAuth)
+	s.mux.HandleFunc("/secrets", s.requireAuth(s.handleSecrets))
+	s.mux.HandleFunc("/secrets/", s.requireAuth(s.handleSecretByKey))
 }
 
 // writeJSON encodes v as JSON and writes it to the response with the given status code.
@@ -45,6 +58,39 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // writeError writes a JSON error response with a single "error" field.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// handleAuth handles POST /auth and issues a signed JWT on valid credentials.
+func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	expectedPassword, ok := credentials[body.Username]
+	if !ok || expectedPassword != body.Password {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	role := "admin"
+	tokenString, err := token.Issue(s.tokenKey, body.Username, role, tokenTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to issue token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"token": tokenString})
 }
 
 // handleSecrets routes POST /secrets and GET /secrets.
