@@ -38,7 +38,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("store.New() error: %v", err)
 	}
-	return New(st, testTokenKey())
+	return New(st, testTokenKey(), nil)
 }
 
 func getToken(t *testing.T, srv *Server, username, password string) string {

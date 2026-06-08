@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/t-Shack/Ferrum/internal/audit"
 	"github.com/t-Shack/Ferrum/internal/store"
 	"github.com/t-Shack/Ferrum/internal/token"
 )
@@ -24,14 +25,16 @@ type Server struct {
 	mux      *http.ServeMux
 	store    *store.Store
 	tokenKey []byte
+	audit    *audit.Logger
 }
 
 // New creates a new Server, wires up all routes, and returns it.
-func New(st *store.Store, tokenKey []byte) *Server {
+func New(st *store.Store, tokenKey []byte, auditLogger *audit.Logger) *Server {
 	s := &Server{
 		mux:      http.NewServeMux(),
 		store:    st,
 		tokenKey: tokenKey,
+		audit:    auditLogger,
 	}
 	s.routes()
 	return s
