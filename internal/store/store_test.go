@@ -118,3 +118,57 @@ func TestStore_GetNotFound(t *testing.T) {
 		t.Errorf("Get() error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestStore_InvalidKey(t *testing.T) {
+	defer cleanup(t)
+
+	s, err := New(testKey())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "empty key", key: ""},
+		{name: "path separator slash", key: "secrets/evil"},
+		{name: "path separator backslash", key: `secrets\evil`},
+		{name: "dot component", key: ".hidden"},
+		{name: "null byte", key: "key\x00evil"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := s.Set(tt.key, "value")
+			if err != ErrInvalidKey {
+				t.Errorf("Set(%q) = %v, want ErrInvalidKey", tt.key, err)
+			}
+		})
+	}
+}
+
+func TestValidKey(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{name: "valid simple key", key: "db_password", want: true},
+		{name: "valid with numbers", key: "api_key_123", want: true},
+		{name: "empty", key: "", want: false},
+		{name: "contains slash", key: "a/b", want: false},
+		{name: "contains backslash", key: `a\b`, want: false},
+		{name: "contains dot", key: ".secret", want: false},
+		{name: "contains null", key: "a\x00b", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := validKey(tt.key)
+			if got != tt.want {
+				t.Errorf("validKey(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}

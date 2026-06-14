@@ -11,6 +11,9 @@ var ErrNotFound = errors.New("secret not found")
 // ErrAlreadyExists is returned when a caller tries to create a key that already exists.
 var ErrAlreadyExists = errors.New("secret already exists")
 
+// ErrInvalidKey is returned when a secret key contains invalid characters or is empty.
+var ErrInvalidKey = errors.New("invalid secret key")
+
 // Secret represents a single stored secret.
 type Secret struct {
 	Key   string
@@ -45,6 +48,10 @@ func New(encryptionKey []byte) (*Store, error) {
 
 // Set stores a new secret in memory and persists it encrypted to disk.
 func (s *Store) Set(key, value string) error {
+	if !validKey(key) {
+		return ErrInvalidKey
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -102,4 +109,17 @@ func (s *Store) List() []Secret {
 		result = append(result, secret)
 	}
 	return result
+}
+
+// validKey returns true if the key is safe to use as a filename.
+func validKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, c := range key {
+		if c == '/' || c == '\\' || c == '.' || c == 0 {
+			return false
+		}
+	}
+	return true
 }

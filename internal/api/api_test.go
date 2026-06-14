@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/t-Shack/Ferrum/internal/audit"
 	"github.com/t-Shack/Ferrum/internal/store"
 )
 
@@ -39,6 +40,24 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("store.New() error: %v", err)
 	}
 	return New(st, testTokenKey(), nil)
+}
+
+func newTestServerWithAudit(t *testing.T) (*Server, *audit.Logger, string) {
+	t.Helper()
+	st, err := store.New(testStoreKey())
+	if err != nil {
+		t.Fatalf("store.New() error: %v", err)
+	}
+
+	logPath := "data/test_audit.log"
+	os.MkdirAll("data", 0700)
+
+	auditLogger, err := audit.New()
+	if err != nil {
+		t.Fatalf("audit.New() error: %v", err)
+	}
+
+	return New(st, testTokenKey(), auditLogger), auditLogger, logPath
 }
 
 func getToken(t *testing.T, srv *Server, username, password string) string {
@@ -194,5 +213,53 @@ func TestReaderCannotDelete(t *testing.T) {
 
 	if delRec.Code != http.StatusForbidden {
 		t.Errorf("reader DELETE status = %d, want %d", delRec.Code, http.StatusForbidden)
+	}
+}
+
+func TestResponseRecorder_CapturesStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		writeStatus int
+		wantStatus  int
+	}{
+		{name: "captures 200", writeStatus: http.StatusOK, wantStatus: http.StatusOK},
+		{name: "captures 201", writeStatus: http.StatusCreated, wantStatus: http.StatusCreated},
+		{name: "captures 403", writeStatus: http.StatusForbidden, wantStatus: http.StatusForbidden},
+		{name: "default is 200 when WriteHeader not called", writeStatus: 0, wantStatus: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			rr := &responseRecorder{ResponseWriter: rec, status: http.StatusOK}
+
+			if tt.writeStatus != 0 {
+				rr.WriteHeader(tt.writeStatus)
+			}
+
+			if rr.status != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rr.status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestAudit_LogsAuthenticatedRequest(t *testing.T) {
+	defer cleanup(t)
+	defer os.RemoveAll("data/test_audit.log")
+
+	srv, auditLogger, _ := newTestServerWithAudit(t)
+	defer auditLogger.Close()
+
+	tok := getToken(t, srv, "admin", "ferrum-admin-password")
+
+	req := httptest.NewRequest(http.MethodPost, "/secrets",
+		bytes.NewBufferString(`{"key":"logged_key","value":"logged_value"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", rec.Code, http.StatusCreated)
 	}
 }

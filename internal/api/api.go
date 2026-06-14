@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -82,7 +83,12 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expectedPassword, ok := credentials[body.Username]
-	if !ok || expectedPassword != body.Password {
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	if subtle.ConstantTimeCompare([]byte(expectedPassword), []byte(body.Password)) != 1 {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -154,6 +160,10 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Set(body.Key, body.Value); err != nil {
 		if err == store.ErrAlreadyExists {
 			writeError(w, http.StatusConflict, "secret already exists")
+			return
+		}
+		if err == store.ErrInvalidKey {
+			writeError(w, http.StatusBadRequest, "invalid secret key")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to store secret")
